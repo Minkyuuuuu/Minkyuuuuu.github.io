@@ -1,4 +1,4 @@
-name: Build & Deploy Next.js (ZIP) to GitHub Pages
+name: Build & Deploy Next.js to GitHub Pages
 
 on:
   push:
@@ -21,83 +21,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Ensure unzip is available
-        run: sudo apt-get update && sudo apt-get install -y unzip
-
-      # If you uploaded a zip (e.g. minimal-quote.zip), unzip to ./site
-      - name: Unzip project if found
-        run: |
-          if ls *.zip >/dev/null 2>&1; then
-            rm -rf site
-            mkdir -p site
-            # unzip the first zip it finds in repo root
-            unzip -q "$(ls *.zip | head -n1)" -d site
-            echo "Zipped project detected. Using ./site as working directory."
-          else
-            echo "No zip found. Using repo root as working directory."
-          fi
-
-      - name: Set working directory var
-        id: setdir
-        run: |
-          if [ -d site ]; then
-            echo "workdir=site" >> $GITHUB_OUTPUT
-          else
-            echo "workdir=." >> $GITHUB_OUTPUT
-          fi
-
-      - name: Show tree
-        run: |
-          echo "Working directory: ${{ steps.setdir.outputs.workdir }}"
-          ls -la "${{ steps.setdir.outputs.workdir }}"
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: 'pnpm'
 
-      # Force static export (safe for GitHub Pages)
-      - name: Write next.config.mjs (if missing, or override)
-        working-directory: ${{ steps.setdir.outputs.workdir }}
-        run: |
-          cat > next.config.mjs <<'EOF'
-          /** @type {import('next').NextConfig} */
-          const nextConfig = {
-            output: 'export',
-            images: { unoptimized: true },
-          };
-          export default nextConfig;
-          EOF
+      - name: Install pnpm
+        run: npm install -g pnpm
 
-      - name: Ensure package.json exists
-        working-directory: ${{ steps.setdir.outputs.workdir }}
-        run: |
-          if [ ! -f package.json ]; then
-            echo "ERROR: package.json not found. Did you upload the correct project zip?"
-            exit 1
-          fi
-
-      - name: Install deps
-        working-directory: ${{ steps.setdir.outputs.workdir }}
-        run: npm install
+      - name: Install dependencies
+        run: pnpm install
 
       - name: Build
-        working-directory: ${{ steps.setdir.outputs.workdir }}
-        run: npx next build
-
-      - name: Export static site
-        working-directory: ${{ steps.setdir.outputs.workdir }}
-        run: |
-          npx next export
-          mkdir -p out
-          echo "minkyu.me" > out/CNAME
-          touch out/.nojekyll
+        run: pnpm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ steps.setdir.outputs.workdir }}/out
+          path: ./out
 
   deploy:
     needs: build
