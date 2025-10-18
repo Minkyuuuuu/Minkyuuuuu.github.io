@@ -24,13 +24,14 @@ jobs:
       - name: Ensure unzip is available
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      # If you uploaded a zip (e.g. minimal-quote.zip), unzip it to ./site
+      # If you uploaded a zip (e.g. minimal-quote.zip), unzip to ./site
       - name: Unzip project if found
         run: |
-          if [ -f minimal-quote.zip ]; then
+          if ls *.zip >/dev/null 2>&1; then
             rm -rf site
             mkdir -p site
-            unzip -q minimal-quote.zip -d site
+            # unzip the first zip it finds in repo root
+            unzip -q "$(ls *.zip | head -n1)" -d site
             echo "Zipped project detected. Using ./site as working directory."
           else
             echo "No zip found. Using repo root as working directory."
@@ -56,8 +57,8 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Force Next.js static export settings
-      - name: Write next.config.mjs
+      # Force static export (safe for GitHub Pages)
+      - name: Write next.config.mjs (if missing, or override)
         working-directory: ${{ steps.setdir.outputs.workdir }}
         run: |
           cat > next.config.mjs <<'EOF'
@@ -68,28 +69,30 @@ jobs:
           };
           export default nextConfig;
           EOF
-          echo "next.config.mjs written"
+
+      - name: Ensure package.json exists
+        working-directory: ${{ steps.setdir.outputs.workdir }}
+        run: |
+          if [ ! -f package.json ]; then
+            echo "ERROR: package.json not found. Did you upload the correct project zip?"
+            exit 1
+          fi
 
       - name: Install deps
         working-directory: ${{ steps.setdir.outputs.workdir }}
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+        run: npm install
 
       - name: Build
         working-directory: ${{ steps.setdir.outputs.workdir }}
-        run: npm run build || npx next build
+        run: npx next build
 
       - name: Export static site
         working-directory: ${{ steps.setdir.outputs.workdir }}
         run: |
-          npm run export || npx next export
-          # next export defaults to ./out
+          npx next export
           mkdir -p out
           echo "minkyu.me" > out/CNAME
+          touch out/.nojekyll
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
