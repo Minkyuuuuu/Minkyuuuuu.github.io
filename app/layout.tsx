@@ -10,9 +10,9 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] })
 const _dancingScript = Dancing_Script({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "v0 App",
-  description: "Created with v0",
-  generator: "v0.app",
+  title: "Minkyu",
+  description: "hallooow",
+  generator: "Minkyu.me",
   metadataBase: new URL("https://minkyu.me"),
   alternates: {
     canonical: "/",
