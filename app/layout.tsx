@@ -1,13 +1,8 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Geist, Geist_Mono } from "next/font/google"
-import { Dancing_Script } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
+import { dancingScript, geistMono, geistSans } from "@/lib/fonts"
 import "./globals.css"
-
-const _geist = Geist({ subsets: ["latin"] })
-const _geistMono = Geist_Mono({ subsets: ["latin"] })
-const _dancingScript = Dancing_Script({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "Minkyu",
@@ -26,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`font-sans antialiased`}>
+      <body className={`${geistSans.variable} ${geistMono.variable} ${dancingScript.variable} font-sans antialiased`}>
         {children}
         <Analytics />
       </body>
