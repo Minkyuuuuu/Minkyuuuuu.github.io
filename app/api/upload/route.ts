@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
         originalFilename: fileName,
       })
 
-      const requiredHeaders = buildRequiredHeaders({ contentType, metadata })
+      const requiredHeaders = buildRequiredHeaders({ contentType })
 
       const putObject = new PutObjectCommand({
         Bucket: bucket,
@@ -154,21 +154,12 @@ function buildObjectMetadata({ autoDeleteOption, expiresAtDate, now, filenameMod
 
 type RequiredHeadersParams = {
   contentType: string
-  metadata: Record<string, string>
 }
 
-function buildRequiredHeaders({ contentType, metadata }: RequiredHeadersParams): Record<string, string> {
-  const headers: Record<string, string> = {
+function buildRequiredHeaders({ contentType }: RequiredHeadersParams): Record<string, string> {
+  return {
     "Content-Type": contentType,
   }
-
-  const metadataEntries = Object.entries(metadata).sort(([a], [b]) => a.localeCompare(b))
-
-  for (const [key, value] of metadataEntries) {
-    headers[`x-amz-meta-${key}`] = value
-  }
-
-  return headers
 }
 
 function resolveContentType(fileType: string | null | undefined): string {
