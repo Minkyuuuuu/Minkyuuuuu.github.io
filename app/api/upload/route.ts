@@ -1,22 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { randomUUID } from "crypto"
 import { extname } from "path"
-import { Readable } from "node:stream"
-import { ReadableStream as NodeReadableStream } from "node:stream/web"
 import { computeExpiry, isAutoDeleteOption, type AutoDeleteOption } from "@/lib/auto-delete"
 import { FILES_PREFIX, getPublicFileUrl, getS3Client, getS3Config } from "@/lib/s3"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
-
-type UploadResponse = {
-  key: string
-  url: string
-  sharePath: string
-  expiresAt: string | null
-  expiryOption: AutoDeleteOption
-}
 
 type FilenameMode = "original" | "random"
 
@@ -25,29 +16,27 @@ const DEFAULT_FILENAME_MODE: FilenameMode = "random"
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData()
-    const file = formData.get("file")
-    const autoDeleteRaw = formData.get("autoDelete")
-    const filenameModeRaw = formData.get("filenameMode")
-
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: "File is required." }, { status: 400 })
+    const body = (await request.json()) as unknown
+    if (!isValidRequestBody(body)) {
+      return NextResponse.json({ error: "Invalid request payload." }, { status: 400 })
     }
 
-    if (!isAutoDeleteOption(autoDeleteRaw)) {
+    const { fileName, fileType, autoDelete, filenameMode: filenameModeRaw } = body
+
+    if (!isAutoDeleteOption(autoDelete)) {
       return NextResponse.json({ error: "Invalid auto-delete option." }, { status: 400 })
     }
 
-    const autoDeleteOption: AutoDeleteOption = autoDeleteRaw
+    const autoDeleteOption: AutoDeleteOption = autoDelete
     const filenameMode = resolveFilenameMode(filenameModeRaw)
 
     const s3Client = getS3Client()
     const { bucket } = getS3Config()
 
-    const extension = extractExtension(file.name)
+    const extension = extractExtension(fileName)
     const sharePath = await determineSharePath({
       filenameMode,
-      originalName: file.name,
+      originalName: fileName,
       extension,
       s3Client,
       bucket,
@@ -57,27 +46,29 @@ export async function POST(request: NextRequest) {
     const now = new Date()
     const expiresAtDate = computeExpiry(autoDeleteOption, now)
 
-    const fileStream = file.stream() as unknown as NodeReadableStream
-    const bodyStream = Readable.fromWeb(fileStream)
+    const contentType = resolveContentType(fileType)
+    const metadata = buildObjectMetadata({
+      autoDeleteOption,
+      expiresAtDate,
+      now,
+      filenameMode,
+      originalFilename: fileName,
+    })
 
     const putObject = new PutObjectCommand({
       Bucket: bucket,
       Key: key,
-      Body: bodyStream,
-      ContentLength: file.size,
-      ContentType: file.type || "application/octet-stream",
-      Metadata: {
-        "uploaded-at": now.toISOString(),
-        "expiry-option": autoDeleteOption,
-        "expires-at": expiresAtDate ? expiresAtDate.toISOString() : "never",
-        "original-filename": sanitizeFilename(file.name),
-        "filename-mode": filenameMode,
-      },
+      ContentType: contentType,
+      Metadata: metadata,
     })
 
-    await s3Client.send(putObject)
+    const uploadUrl = await getSignedUrl(s3Client, putObject, {
+      expiresIn: 60 * 15,
+    })
 
-    const payload: UploadResponse = {
+    const payload = {
+      uploadUrl,
+      requiredHeaders: buildRequiredHeaders({ contentType, metadata }),
       key,
       url: getPublicFileUrl(key),
       sharePath,
@@ -90,6 +81,84 @@ export async function POST(request: NextRequest) {
     console.error("Upload failed", error)
     return NextResponse.json({ error: "Failed to upload file." }, { status: 500 })
   }
+}
+
+type RequestBody = {
+  fileName: string
+  fileType?: string | null
+  fileSize?: number
+  autoDelete: AutoDeleteOption
+  filenameMode?: string | null
+}
+
+function isValidRequestBody(value: unknown): value is RequestBody {
+  if (!value || typeof value !== "object") return false
+
+  const candidate = value as Partial<RequestBody>
+  if (typeof candidate.fileName !== "string" || candidate.fileName.trim().length === 0) {
+    return false
+  }
+
+  if (candidate.fileType !== undefined && candidate.fileType !== null && typeof candidate.fileType !== "string") {
+    return false
+  }
+
+  if (candidate.fileSize !== undefined && candidate.fileSize !== null && (typeof candidate.fileSize !== "number" || !Number.isFinite(candidate.fileSize) || candidate.fileSize < 0)) {
+    return false
+  }
+
+  if (typeof candidate.autoDelete !== "string") {
+    return false
+  }
+
+  if (candidate.filenameMode !== undefined && candidate.filenameMode !== null && typeof candidate.filenameMode !== "string") {
+    return false
+  }
+
+  return true
+}
+
+type ObjectMetadataParams = {
+  autoDeleteOption: AutoDeleteOption
+  expiresAtDate: Date | null
+  now: Date
+  filenameMode: FilenameMode
+  originalFilename: string
+}
+
+function buildObjectMetadata({ autoDeleteOption, expiresAtDate, now, filenameMode, originalFilename }: ObjectMetadataParams): Record<string, string> {
+  return {
+    "uploaded-at": now.toISOString(),
+    "expiry-option": autoDeleteOption,
+    "expires-at": expiresAtDate ? expiresAtDate.toISOString() : "never",
+    "original-filename": sanitizeFilename(originalFilename),
+    "filename-mode": filenameMode,
+  }
+}
+
+type RequiredHeadersParams = {
+  contentType: string
+  metadata: Record<string, string>
+}
+
+function buildRequiredHeaders({ contentType, metadata }: RequiredHeadersParams): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": contentType,
+  }
+
+  for (const [key, value] of Object.entries(metadata)) {
+    headers[`x-amz-meta-${key}`] = value
+  }
+
+  return headers
+}
+
+function resolveContentType(fileType: string | null | undefined): string {
+  if (typeof fileType === "string" && fileType.trim() !== "") {
+    return fileType
+  }
+
+  return "application/octet-stream"
 }
 
 function extractExtension(filename: string): string {
