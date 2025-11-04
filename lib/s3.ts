@@ -46,10 +46,12 @@ export function getS3Client(): S3Client {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
     },
-    // Disable automatic request checksums. When enabled, the middleware adds a
-    // placeholder x-amz-checksum-* value to presigned URLs which then causes S3
-    // to reject browser uploads whose payload hash does not match the placeholder.
-    requestChecksumCalculation: async () => RequestChecksumCalculation.NEVER,
+    // Request checksum calculation defaults to WHEN_SUPPORTED, which makes the
+    // SDK inject placeholder x-amz-checksum-* query params into presigned URLs.
+    // Browsers then upload the file without that checksum header and S3 rejects
+    // the PUT with a 403. Force WHEN_REQUIRED so we only add checksums when the
+    // service explicitly demands them (not the case for simple PUT uploads).
+    requestChecksumCalculation: async () => RequestChecksumCalculation.WHEN_REQUIRED,
   })
 
   return client
