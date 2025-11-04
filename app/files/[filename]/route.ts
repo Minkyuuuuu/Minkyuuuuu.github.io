@@ -3,6 +3,8 @@ import { GetObjectCommand } from "@aws-sdk/client-s3"
 import { Readable } from "node:stream"
 import { FILES_PREFIX, getS3Client, getS3Config } from "@/lib/s3"
 
+type NodeWebReadableStream<T> = import("stream/web").ReadableStream<T>
+
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
@@ -80,16 +82,18 @@ function toWebReadableStream(body: unknown): ReadableStream<Uint8Array> {
   }
 
   if (body instanceof Readable) {
-    return Readable.toWeb(body)
+    return coerceToDomReadableStream(Readable.toWeb(body))
   }
 
-  const maybeReadable = body as { transformToWebStream?: () => ReadableStream<Uint8Array> }
+  const maybeReadable = body as {
+    transformToWebStream?: () => NodeWebReadableStream<Uint8Array> | ReadableStream<Uint8Array>
+  }
   if (typeof maybeReadable?.transformToWebStream === "function") {
-    return maybeReadable.transformToWebStream()
+    return coerceToDomReadableStream(maybeReadable.transformToWebStream())
   }
 
   if (body instanceof ReadableStream) {
-    return body
+    return coerceToDomReadableStream(body)
   }
 
   if (body instanceof Uint8Array) {
@@ -102,6 +106,10 @@ function toWebReadableStream(body: unknown): ReadableStream<Uint8Array> {
   }
 
   throw new Error("Unsupported S3 body stream type")
+}
+
+function coerceToDomReadableStream<T>(stream: NodeWebReadableStream<T> | ReadableStream<T>): ReadableStream<T> {
+  return stream as unknown as ReadableStream<T>
 }
 
 function isValidFilename(filename: string): boolean {
