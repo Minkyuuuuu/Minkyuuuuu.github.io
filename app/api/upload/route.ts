@@ -3,6 +3,7 @@ import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
 import { randomUUID } from "crypto"
 import { extname } from "path"
 import { Readable } from "node:stream"
+import { ReadableStream as NodeReadableStream } from "node:stream/web"
 import { computeExpiry, isAutoDeleteOption, type AutoDeleteOption } from "@/lib/auto-delete"
 import { FILES_PREFIX, getPublicFileUrl, getS3Client, getS3Config } from "@/lib/s3"
 
@@ -56,7 +57,8 @@ export async function POST(request: NextRequest) {
     const now = new Date()
     const expiresAtDate = computeExpiry(autoDeleteOption, now)
 
-    const bodyStream = Readable.fromWeb(file.stream())
+    const fileStream = file.stream() as unknown as NodeReadableStream
+    const bodyStream = Readable.fromWeb(fileStream)
 
     const putObject = new PutObjectCommand({
       Bucket: bucket,
