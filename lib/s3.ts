@@ -49,8 +49,8 @@ export function getS3Client(): S3Client {
     // Request checksum calculation defaults to WHEN_SUPPORTED, which makes the
     // SDK inject placeholder x-amz-checksum-* query params into presigned URLs.
     // Browsers then upload the file without that checksum header and S3 rejects
-    // the PUT with a 403. Force WHEN_REQUIRED so we only add checksums when the
-    // service explicitly demands them (not the case for simple PUT uploads).
+    // the PUT with a 403. Force WHEN_REQUIRED so checksums are only added when
+    // S3 explicitly requires them (not the case for standard PUT uploads).
     requestChecksumCalculation: async () => RequestChecksumCalculation.WHEN_REQUIRED,
   })
 
