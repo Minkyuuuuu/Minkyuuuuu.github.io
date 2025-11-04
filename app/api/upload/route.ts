@@ -6,6 +6,7 @@ import { computeExpiry, isAutoDeleteOption, type AutoDeleteOption } from "@/lib/
 import { FILES_PREFIX, getPublicFileUrl, getS3Client, getS3Config } from "@/lib/s3"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 type UploadResponse = {
   key: string
