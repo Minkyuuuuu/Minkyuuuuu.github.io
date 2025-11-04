@@ -31,3 +31,7 @@ export function computeExpiry(option: AutoDeleteOption, referenceDate = new Date
 export function isAutoDeleteOption(value: unknown): value is AutoDeleteOption {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(secondsLookup, value)
 }
+
+export function isFiniteAutoDelete(option: AutoDeleteOption): boolean {
+  return secondsLookup[option] !== null
+}
