@@ -319,12 +319,15 @@ function uploadFileDirectly({ file, session, onProgress }: DirectUploadOptions):
         return
       }
 
-      const message = xhr.statusText || "Direct upload failed."
+      const body = xhr.responseText?.trim()
+      const message = body || xhr.statusText || "Direct upload failed."
       reject(new Error(message))
     }
 
     xhr.onerror = () => {
-      reject(new Error("Network error while uploading to storage."))
+      const body = xhr.responseText?.trim()
+      const message = body || "Network error while uploading to storage."
+      reject(new Error(message))
     }
 
     xhr.send(file)
