@@ -3,6 +3,7 @@ import { DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command } from "@a
 import { FILES_PREFIX, getS3Client, getS3Config } from "@/lib/s3"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 type CleanupAction = "deleted" | "skipped" | "error"
 

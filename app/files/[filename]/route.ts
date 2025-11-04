@@ -5,7 +5,8 @@ import { FILES_PREFIX, getPublicFileUrl, getS3Client, getS3Config } from "@/lib/
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: NextRequest, { params }: { params: { filename: string } }) {
+export async function GET(_request: NextRequest, context: { params: Promise<{ filename: string }> }) {
+  const params = await context.params
   const rawFilename = params.filename
   const filename = decodeURIComponent(rawFilename)
 
