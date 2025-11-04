@@ -235,16 +235,78 @@ type UploadOptions = {
   onProgress: (progress: ProgressState) => void
 }
 
-function uploadWithProgress({ file, autoDelete, filenameMode, onProgress }: UploadOptions): Promise<UploadResult> {
-  return new Promise<UploadResult>((resolve, reject) => {
-    const formData = new FormData()
-    formData.append("file", file)
-    formData.append("autoDelete", autoDelete)
-    formData.append("filenameMode", filenameMode)
+async function uploadWithProgress({ file, autoDelete, filenameMode, onProgress }: UploadOptions): Promise<UploadResult> {
+  const session = await requestUploadSession({ file, autoDelete, filenameMode })
 
+  await uploadFileDirectly({ file, session, onProgress })
+
+  onProgress({ loaded: file.size, total: file.size })
+
+  return extractUploadResult(session)
+}
+
+type UploadSession = UploadResult & {
+  uploadUrl: string
+  requiredHeaders: Record<string, string>
+}
+
+type UploadSessionRequest = {
+  file: File
+  autoDelete: AutoDeleteOption
+  filenameMode: FilenameMode
+}
+
+async function requestUploadSession({ file, autoDelete, filenameMode }: UploadSessionRequest): Promise<UploadSession> {
+  const response = await fetch("/api/upload", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      fileName: file.name,
+      fileType: file.type || null,
+      fileSize: file.size,
+      autoDelete,
+      filenameMode,
+    }),
+  })
+
+  if (!response.ok) {
+    let message = "Failed to initiate upload."
+    try {
+      const payload = (await response.json()) as unknown
+      if (payload && typeof payload === "object" && payload !== null && typeof (payload as { error?: unknown }).error === "string") {
+        message = (payload as { error: string }).error
+      }
+    } catch {
+      // Ignore JSON parsing errors and fall back to default message.
+    }
+
+    throw new Error(message)
+  }
+
+  const data = (await response.json()) as unknown
+  if (!isUploadSession(data)) {
+    throw new Error("Upload initialization response was invalid.")
+  }
+
+  return data
+}
+
+type DirectUploadOptions = {
+  file: File
+  session: UploadSession
+  onProgress: (progress: ProgressState) => void
+}
+
+function uploadFileDirectly({ file, session, onProgress }: DirectUploadOptions): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
-    xhr.open("POST", "/api/upload")
-    xhr.responseType = "json"
+    xhr.open("PUT", session.uploadUrl)
+
+    for (const [key, value] of Object.entries(session.requiredHeaders)) {
+      xhr.setRequestHeader(key, value)
+    }
 
     xhr.upload.onprogress = (event) => {
       const total = event.lengthComputable && event.total > 0 ? event.total : file.size
@@ -252,44 +314,31 @@ function uploadWithProgress({ file, autoDelete, filenameMode, onProgress }: Uplo
     }
 
     xhr.onload = () => {
-      const { status } = xhr
-      const responseData = xhr.response as unknown
-
-      if (status >= 200 && status < 300) {
-        if (isUploadResult(responseData)) {
-          onProgress({ loaded: file.size, total: file.size })
-          resolve(responseData)
-          return
-        }
-
-        try {
-          const parsed = JSON.parse(xhr.responseText || "{}") as unknown
-          if (isUploadResult(parsed)) {
-            onProgress({ loaded: file.size, total: file.size })
-            resolve(parsed)
-            return
-          }
-        } catch {
-          // Fall through to rejection below if parsing fails.
-        }
-
-        reject(new Error("Upload succeeded but the server response was invalid."))
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve()
         return
       }
 
-      const message =
-        responseData && typeof responseData === "object" && responseData !== null && typeof (responseData as { error?: unknown }).error === "string"
-          ? (responseData as { error: string }).error
-          : xhr.statusText || "Upload failed."
+      const message = xhr.statusText || "Direct upload failed."
       reject(new Error(message))
     }
 
     xhr.onerror = () => {
-      reject(new Error("Network error while uploading."))
+      reject(new Error("Network error while uploading to storage."))
     }
 
-    xhr.send(formData)
+    xhr.send(file)
   })
+}
+
+function extractUploadResult(session: UploadSession): UploadResult {
+  return {
+    key: session.key,
+    url: session.url,
+    sharePath: session.sharePath,
+    expiresAt: session.expiresAt,
+    expiryOption: session.expiryOption,
+  }
 }
 
 function getProgressPercentage(progress: ProgressState): number {
@@ -304,8 +353,27 @@ function getProgressPercentage(progress: ProgressState): number {
 function buildProgressLabel(progress: ProgressState): string {
   const total = progress.total > 0 ? progress.total : progress.loaded
   const percentage = getProgressPercentage({ loaded: progress.loaded, total: total || progress.loaded || 1 })
-  const totalLabel = total > 0 ? formatBytes(total) : formatBytes(progress.loaded)
-  return `Uploading... ${formatBytes(progress.loaded)} / ${totalLabel} (${percentage}%)`
+  const loadedMb = formatMegabytes(progress.loaded)
+  const totalMb = formatMegabytes(total)
+  return `Uploading... ${loadedMb} MB / ${totalMb} MB (${percentage}%)`
+}
+
+function formatMegabytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0.0"
+  }
+
+  const megabytes = bytes / (1024 * 1024)
+
+  if (megabytes >= 100) {
+    return megabytes.toFixed(0)
+  }
+
+  if (megabytes >= 10) {
+    return megabytes.toFixed(1)
+  }
+
+  return megabytes.toFixed(2)
 }
 
 function formatBytes(bytes: number): string {
@@ -326,6 +394,25 @@ function formatBytes(bytes: number): string {
   return `${formatted} ${units[unitIndex]}`
 }
 
+function isUploadSession(value: unknown): value is UploadSession {
+  if (!isUploadResult(value)) return false
+
+  const candidate = value as UploadResult & {
+    uploadUrl?: unknown
+    requiredHeaders?: unknown
+  }
+
+  if (typeof candidate.uploadUrl !== "string" || candidate.uploadUrl.length === 0) {
+    return false
+  }
+
+  if (!isRecordOfStrings(candidate.requiredHeaders)) {
+    return false
+  }
+
+  return true
+}
+
 function isUploadResult(value: unknown): value is UploadResult {
   if (!value || typeof value !== "object") return false
 
@@ -337,6 +424,22 @@ function isUploadResult(value: unknown): value is UploadResult {
     (candidate.expiresAt === null || typeof candidate.expiresAt === "string") &&
     typeof candidate.expiryOption === "string"
   )
+}
+
+function isRecordOfStrings(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== "object") return false
+
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof key !== "string") {
+      return false
+    }
+
+    if (typeof val !== "string") {
+      return false
+    }
+  }
+
+  return true
 }
 
 function formatDateTime(value: string): string {
