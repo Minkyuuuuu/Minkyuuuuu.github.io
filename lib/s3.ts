@@ -46,7 +46,10 @@ export function getS3Client(): S3Client {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
     },
-    requestChecksumCalculation: RequestChecksumCalculation.WHEN_REQUIRED,
+    // Disable automatic request checksums. When enabled, the middleware adds a
+    // placeholder x-amz-checksum-* value to presigned URLs which then causes S3
+    // to reject browser uploads whose payload hash does not match the placeholder.
+    requestChecksumCalculation: async () => RequestChecksumCalculation.NEVER,
   })
 
   return client
