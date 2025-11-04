@@ -5,14 +5,8 @@ import { FILES_PREFIX, getPublicFileUrl, getS3Client, getS3Config } from "@/lib/
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-type RouteContext = {
-  params: {
-    filename: string
-  }
-}
-
-export async function GET(_request: NextRequest, context: RouteContext) {
-  const rawFilename = context.params.filename
+export async function GET(_request: NextRequest, { params }: { params: { filename: string } }) {
+  const rawFilename = params.filename
   const filename = decodeURIComponent(rawFilename)
 
   if (filename.includes("/")) {
