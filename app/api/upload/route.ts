@@ -312,8 +312,9 @@ function sanitizeBaseName(baseName: string): string {
   const collapsedSpaces = cleaned.replace(/\s+/g, " ")
   const collapsedSeparators = collapsedSpaces.replace(/-+/g, "-")
   const trimmed = collapsedSeparators.trim().replace(/^\.+/, "").replace(/\.+$/, "")
+  const dashed = trimmed.replace(/\s+/g, "-").replace(/-+/g, "-")
 
-  return trimmed || "file"
+  return dashed || "file"
 }
 
 function truncateBase(baseName: string, extension: string): string {
