@@ -11,7 +11,7 @@ type UploadResult = {
   expiryOption: AutoDeleteOption
 }
 
-type FilenameMode = "original" | "random"
+type FilenameMode = "original" | "random" | "custom"
 
 type ProgressState = {
   loaded: number
@@ -26,8 +26,13 @@ const FILENAME_MODE_OPTIONS: Array<{ value: FilenameMode; label: string; descrip
   },
   {
     value: "random",
-    label: "Random UUID",
-    description: "Generate a unique name to hide the original filename.",
+    label: "Short Random ID",
+    description: "Generate a 6-character ID to hide the original filename.",
+  },
+  {
+    value: "custom",
+    label: "Custom Name",
+    description: "Specify the exact filename to use for the upload.",
   },
 ]
 
@@ -39,6 +44,7 @@ export function UploadForm() {
   const [file, setFile] = useState<File | null>(null)
   const [autoDelete, setAutoDelete] = useState<AutoDeleteOption>(defaultOption)
   const [filenameMode, setFilenameMode] = useState<FilenameMode>(defaultFilenameMode)
+  const [customFileName, setCustomFileName] = useState<string>("")
   const [isUploading, setIsUploading] = useState(false)
   const [result, setResult] = useState<UploadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -49,6 +55,8 @@ export function UploadForm() {
     setResult(null)
     setError(null)
     setAutoDelete(defaultOption)
+      setFilenameMode(defaultFilenameMode)
+      setCustomFileName("")
     setProgress(null)
     formRef.current?.reset()
   }
@@ -67,12 +75,13 @@ export function UploadForm() {
     setProgress({ loaded: 0, total: file.size })
 
     try {
-      const payload = await uploadWithProgress({
-        file,
-        autoDelete,
-        filenameMode,
-        onProgress: (update) => setProgress(update),
-      })
+        const payload = await uploadWithProgress({
+          file,
+          autoDelete,
+          filenameMode,
+          customFileName: filenameMode === "custom" ? customFileName.trim() : null,
+          onProgress: (update) => setProgress(update),
+        })
 
       setResult(payload)
       formRef.current?.reset()
@@ -88,7 +97,7 @@ export function UploadForm() {
   const shareUrl = result ? buildShareUrl(result.sharePath) : ""
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} className="mx-auto flex w-full max-w-lg flex-col gap-6 rounded-lg border border-neutral-200 bg-white/80 p-8 shadow-sm backdrop-blur">
+      <form ref={formRef} onSubmit={handleSubmit} className="mx-auto flex w-full max-w-lg flex-col gap-6 rounded-lg border border-neutral-200 bg-white/80 p-8 shadow-sm backdrop-blur">
       <div>
         <h1 className="text-2xl font-semibold text-neutral-900">Secure File Upload</h1>
         <p className="mt-2 text-sm text-neutral-500">Upload files directly to your S3 bucket and get a shareable link.</p>
@@ -136,13 +145,18 @@ export function UploadForm() {
         <div className="flex flex-col gap-2">
           <span className="text-sm font-medium text-neutral-700">Filename Mode</span>
           <div className="grid gap-2 sm:grid-cols-2">
-            {FILENAME_MODE_OPTIONS.map((option) => {
+              {FILENAME_MODE_OPTIONS.map((option) => {
               const isActive = filenameMode === option.value
               return (
                 <button
                   key={option.value}
                   type="button"
-                  onClick={() => setFilenameMode(option.value)}
+                    onClick={() => {
+                      setFilenameMode(option.value)
+                      if (option.value !== "custom") {
+                        setCustomFileName("")
+                      }
+                    }}
                   disabled={isUploading}
                   className={`rounded-md border px-4 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-neutral-300 ${
                     isActive
@@ -159,10 +173,34 @@ export function UploadForm() {
             })}
           </div>
           <input type="hidden" name="filenameMode" value={filenameMode} />
+            {filenameMode === "custom" ? (
+              <div className="space-y-1">
+                <label htmlFor="customFileName" className="text-xs font-medium text-neutral-700">
+                  Custom Filename (without extension)
+                </label>
+                <input
+                  id="customFileName"
+                  name="customFileName"
+                  type="text"
+                  value={customFileName}
+                  onChange={(event) => setCustomFileName(event.target.value)}
+                  placeholder="e.g. project-report"
+                  maxLength={200}
+                  disabled={isUploading}
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  required
+                />
+                <p className="text-xs text-neutral-500">
+                  The original file extension will be preserved automatically.
+                </p>
+              </div>
+            ) : null}
           <p className="text-xs text-neutral-500">
             {filenameMode === "original"
               ? "Keep the original name. If a duplicate exists, we'll add (2), (3), and so on automatically."
-              : "Use a random UUID so the original filename stays private."}
+                : filenameMode === "random"
+                  ? "Use a short random ID so the original filename stays private."
+                  : "Set an exact filename. We'll keep the original extension and ensure the name is available."}
           </p>
         </div>
 
@@ -232,11 +270,19 @@ type UploadOptions = {
   file: File
   autoDelete: AutoDeleteOption
   filenameMode: FilenameMode
+  customFileName: string | null
   onProgress: (progress: ProgressState) => void
 }
 
-async function uploadWithProgress({ file, autoDelete, filenameMode, onProgress }: UploadOptions): Promise<UploadResult> {
-  const session = await requestUploadSession({ file, autoDelete, filenameMode })
+async function uploadWithProgress({ file, autoDelete, filenameMode, customFileName, onProgress }: UploadOptions): Promise<UploadResult> {
+  if (filenameMode === "custom") {
+    const trimmed = customFileName?.trim() ?? ""
+    if (!trimmed) {
+      throw new Error("Please provide a custom filename.")
+    }
+  }
+
+  const session = await requestUploadSession({ file, autoDelete, filenameMode, customFileName })
 
   await uploadFileDirectly({ file, session, onProgress })
 
@@ -254,9 +300,10 @@ type UploadSessionRequest = {
   file: File
   autoDelete: AutoDeleteOption
   filenameMode: FilenameMode
+  customFileName: string | null
 }
 
-async function requestUploadSession({ file, autoDelete, filenameMode }: UploadSessionRequest): Promise<UploadSession> {
+async function requestUploadSession({ file, autoDelete, filenameMode, customFileName }: UploadSessionRequest): Promise<UploadSession> {
   const response = await fetch("/api/upload", {
     method: "POST",
     headers: {
@@ -268,6 +315,7 @@ async function requestUploadSession({ file, autoDelete, filenameMode }: UploadSe
       fileSize: file.size,
       autoDelete,
       filenameMode,
+      customFileName: filenameMode === "custom" ? (customFileName?.trim() || null) : null,
     }),
   })
 
