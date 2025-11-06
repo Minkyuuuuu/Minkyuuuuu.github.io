@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { performCleanup } from "@/app/api/cleanup/route"
+import { performCleanup } from "@/lib/cleanup"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
