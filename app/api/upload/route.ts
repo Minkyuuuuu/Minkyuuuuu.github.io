@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
-import { createHash, randomUUID } from "crypto"
+import { createHash, randomBytes } from "crypto"
 import { extname } from "path"
 import { computeExpiry, isAutoDeleteOption, type AutoDeleteOption } from "@/lib/auto-delete"
 import { FILES_PREFIX, getPublicFileUrl, getS3Client, getS3Config } from "@/lib/s3"
@@ -9,7 +9,7 @@ import { FILES_PREFIX, getPublicFileUrl, getS3Client, getS3Config } from "@/lib/
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-type FilenameMode = "original" | "random"
+type FilenameMode = "original" | "random" | "custom"
 
 const MAX_FILENAME_LENGTH = 200
 const DEFAULT_FILENAME_MODE: FilenameMode = "random"
@@ -23,16 +23,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid request payload." }, { status: 400 })
     }
 
-    const { fileName, fileType, autoDelete, filenameMode: filenameModeRaw } = body
+      const { fileName, fileType, autoDelete, filenameMode: filenameModeRaw, customFileName } = body
 
     if (!isAutoDeleteOption(autoDelete)) {
       return NextResponse.json({ error: "Invalid auto-delete option." }, { status: 400 })
     }
 
       const autoDeleteOption: AutoDeleteOption = autoDelete
-      const filenameMode = resolveFilenameMode(filenameModeRaw)
+        const filenameMode = resolveFilenameMode(filenameModeRaw)
 
-      const s3Client = getS3Client()
+        if (filenameMode === "custom" && !isValidCustomName(customFileName)) {
+          return NextResponse.json({ error: "Custom filename is required." }, { status: 400 })
+        }
+
+        const normalizedCustomName = filenameMode === "custom" ? (customFileName?.trim() ?? "") : ""
+
+        const s3Client = getS3Client()
       const { bucket, region: s3Region } = getS3Config()
 
       await ensureS3ClientRegion(s3Client, s3Region)
@@ -40,10 +46,11 @@ export async function POST(request: NextRequest) {
       const extension = extractExtension(fileName)
       const sharePath = await determineSharePath({
         filenameMode,
-        originalName: fileName,
+          originalName: fileName,
         extension,
         s3Client,
         bucket,
+          customName: filenameMode === "custom" ? normalizedCustomName : null,
       })
       const key = `${FILES_PREFIX}${sharePath}`
 
@@ -51,12 +58,13 @@ export async function POST(request: NextRequest) {
       const expiresAtDate = computeExpiry(autoDeleteOption, now)
 
       const contentType = resolveContentType(fileType)
-      const metadata = buildObjectMetadata({
+        const metadata = buildObjectMetadata({
         autoDeleteOption,
         expiresAtDate,
         now,
         filenameMode,
         originalFilename: fileName,
+          customFilename: filenameMode === "custom" ? normalizedCustomName : undefined,
       })
 
       const requiredHeaders = buildRequiredHeaders({ contentType })
@@ -105,6 +113,7 @@ type RequestBody = {
   fileSize?: number
   autoDelete: AutoDeleteOption
   filenameMode?: string | null
+  customFileName?: string | null
 }
 
 function isValidRequestBody(value: unknown): value is RequestBody {
@@ -127,9 +136,13 @@ function isValidRequestBody(value: unknown): value is RequestBody {
     return false
   }
 
-  if (candidate.filenameMode !== undefined && candidate.filenameMode !== null && typeof candidate.filenameMode !== "string") {
+    if (candidate.filenameMode !== undefined && candidate.filenameMode !== null && typeof candidate.filenameMode !== "string") {
     return false
   }
+
+    if (candidate.customFileName !== undefined && candidate.customFileName !== null && typeof candidate.customFileName !== "string") {
+      return false
+    }
 
   return true
 }
@@ -140,15 +153,17 @@ type ObjectMetadataParams = {
   now: Date
   filenameMode: FilenameMode
   originalFilename: string
+  customFilename?: string
 }
 
-function buildObjectMetadata({ autoDeleteOption, expiresAtDate, now, filenameMode, originalFilename }: ObjectMetadataParams): Record<string, string> {
+function buildObjectMetadata({ autoDeleteOption, expiresAtDate, now, filenameMode, originalFilename, customFilename }: ObjectMetadataParams): Record<string, string> {
   return {
     "uploaded-at": now.toISOString(),
     "expiry-option": autoDeleteOption,
     "expires-at": expiresAtDate ? expiresAtDate.toISOString() : "never",
     "original-filename": sanitizeFilename(originalFilename),
     "filename-mode": filenameMode,
+    ...(customFilename ? { "custom-filename": sanitizeFilename(customFilename) } : {}),
   }
 }
 
@@ -195,7 +210,7 @@ function resolveFilenameMode(value: unknown): FilenameMode {
 }
 
 function isFilenameMode(value: unknown): value is FilenameMode {
-  return value === "original" || value === "random"
+  return value === "original" || value === "random" || value === "custom"
 }
 
 type SharePathParams = {
@@ -204,12 +219,27 @@ type SharePathParams = {
   extension: string
   s3Client: ReturnType<typeof getS3Client>
   bucket: string
+  customName: string | null
 }
 
-async function determineSharePath({ filenameMode, originalName, extension, s3Client, bucket }: SharePathParams): Promise<string> {
+async function determineSharePath({ filenameMode, originalName, extension, s3Client, bucket, customName }: SharePathParams): Promise<string> {
   if (filenameMode === "random") {
-    const timestamp = Date.now()
-    return `${timestamp}-${randomUUID()}${extension}`
+    return await allocateRandomName(extension, s3Client, bucket)
+  }
+
+  if (filenameMode === "custom") {
+    if (!customName) {
+      throw new Error("Custom filename missing")
+    }
+
+    const { baseName: customBase } = splitFilename(customName, extension)
+    const sanitizedBase = sanitizeBaseName(customBase)
+    if (!sanitizedBase) {
+      throw new Error("Custom filename invalid")
+    }
+
+    const truncatedBase = truncateBase(sanitizedBase, extension)
+    return ensureUniqueFilename(truncatedBase, extension, s3Client, bucket)
   }
 
   const { baseName } = splitFilename(originalName, extension)
@@ -217,6 +247,37 @@ async function determineSharePath({ filenameMode, originalName, extension, s3Cli
   const truncatedBase = truncateBase(sanitizedBase, extension)
 
   return ensureUniqueFilename(truncatedBase, extension, s3Client, bucket)
+}
+
+async function allocateRandomName(extension: string, s3Client: ReturnType<typeof getS3Client>, bucket: string): Promise<string> {
+  const maxAttempts = 1000
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const candidateBase = generateShortRandomName()
+    const candidate = `${candidateBase}${extension}`
+    const key = `${FILES_PREFIX}${candidate}`
+    if (!(await objectExists(s3Client, bucket, key))) {
+      return candidate
+    }
+  }
+
+  throw new Error("Unable to allocate a random filename after many attempts.")
+}
+
+function isValidCustomName(value: unknown): value is string {
+  if (typeof value !== "string") return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  return sanitizeBaseName(trimmed).length > 0
+}
+
+function generateShortRandomName(): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+  const bytes = randomBytes(6)
+  let result = ""
+  for (let index = 0; index < 6; index += 1) {
+    result += alphabet[bytes[index] % alphabet.length]
+  }
+  return result
 }
 
 type FilenameParts = {
