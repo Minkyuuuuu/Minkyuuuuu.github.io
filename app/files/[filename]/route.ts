@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
-import { GetObjectCommand } from "@aws-sdk/client-s3"
+import { GetObjectCommand, type GetObjectCommandInput } from "@aws-sdk/client-s3"
 import { Readable } from "node:stream"
 import { FILES_PREFIX, getS3Client, getS3Config } from "@/lib/s3"
 
@@ -8,7 +8,7 @@ type NodeWebReadableStream<T> = import("stream/web").ReadableStream<T>
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ filename: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ filename: string }> }) {
   const params = await context.params
   const rawFilename = params.filename
   const filename = decodeURIComponent(rawFilename)
@@ -21,13 +21,18 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ fi
   const s3Client = getS3Client()
   const { bucket } = getS3Config()
 
-  try {
-    const object = await s3Client.send(
-      new GetObjectCommand({
+    try {
+      const rangeHeader = request.headers.get("range") ?? undefined
+      const commandInput: GetObjectCommandInput = {
         Bucket: bucket,
         Key: key,
-      }),
-    )
+      }
+
+      if (rangeHeader) {
+        commandInput.Range = rangeHeader
+      }
+
+      const object = await s3Client.send(new GetObjectCommand(commandInput))
 
     if (!object.Body) {
       console.error(`Missing body while streaming ${key}`)
@@ -37,10 +42,14 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ fi
     const stream = toWebReadableStream(object.Body)
     const headers = new Headers()
 
-    headers.set("Content-Type", object.ContentType || "application/octet-stream")
-    if (object.ContentLength !== undefined) {
-      headers.set("Content-Length", object.ContentLength.toString())
-    }
+      headers.set("Content-Type", object.ContentType || "application/octet-stream")
+      if (object.ContentLength !== undefined) {
+        headers.set("Content-Length", object.ContentLength.toString())
+      }
+      headers.set("Accept-Ranges", "bytes")
+      if (object.ContentRange) {
+        headers.set("Content-Range", object.ContentRange)
+      }
     if (object.LastModified) {
       headers.set("Last-Modified", object.LastModified.toUTCString())
     }
@@ -62,8 +71,10 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ fi
     const dispositionName = selectDispositionFilename(filename, object.Metadata)
     applyContentDisposition(headers, dispositionName)
 
-    return new NextResponse(stream, {
-      status: 200,
+      const status = object.$metadata?.httpStatusCode ?? (rangeHeader ? 206 : 200)
+
+      return new NextResponse(stream, {
+        status,
       headers,
     })
   } catch (error) {
