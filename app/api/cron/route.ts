@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server"
 import { performCleanup } from "@/lib/cleanup"
 
 export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 function isAuthorized(request: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET
